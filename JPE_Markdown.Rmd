@@ -1,0 +1,672 @@
+---
+title: "Supplementary Material: Statistical analysis"
+output: pdf_document
+toc: true
+toc_depth: 3
+df_print: kable
+latex_engine: pdflatex
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+``` {r libraries, echo=FALSE, include=FALSE}
+library(glmmTMB)
+library(car)
+library(emmeans)
+library(effects)
+library(multcomp)
+library(MuMIn)
+library(DHARMa)
+library(ggplot2); theme_set(theme_bw())
+library(tidyverse)
+library(bbmle)
+library(plyr)
+library(dplyr)
+library(lubridate)
+library(ggeffects)
+library(MASS)
+library(mgcv)
+library(gamm4)
+library(itsadug)
+library(lme4)
+library(kableExtra)
+library(sjPlot)
+library(sjmisc)
+library(sjlabelled)
+library(readxl)
+library(xtable)
+
+source(system.file("other_methods","lsmeans_methods.R",package="glmmTMB"))
+```
+
+\vspace{10mm}
+
+This document presents our analysis of the Sentinel Autocidal Gravid Ovitrap (SAGO) dataset for indoor and outdoor *Aedes aegypti* female abundance in South Texas, US. We used generalized linear mixed models (GLMM) and generalized additive mixed models (GAMM) for count data (Poisson, negative binomial type 1 (gamma-Poisson) and type 2 distributions). Best fit models were selected based on the lowest Akaike information criterion (AIC). All models employed the offset function to account for variation in sampling effort. The R code can be found in Supplemental Materials 2: R code, or visit [LRGV AGO repository](https://github.com/jgjuarez/AGOintervention).
+
+# GLMM {.tabset-pills}
+
+We used generalized linear mixed models with the grouping variable Intervention Phase (3 levels: Pre, Control and Intervention) to evaluate female *Ae. aegypti* relative abundance between treatments and socioeconomic status. We focused our analysis in two distinct scenarios:
+
+1. Immediate effect models: Effects are immediate and last for the whole intervention period
+
+2. Short effect models: Effects are transient and do not last for the whole intervention period
+    + Reduced time frames 
+      + Weekly
+      + Monthly
+    + Delayed time frames
+      + 1 week
+      + 2 weeks
+
+## Immediate effect models
+
+In this section we first tested the best fit distribution of the dataset assuming that mosquito counts followed a Poisson distribution and then compared the fits with those of overdispersed counts that followed a gamma-Poisson (NB1) and negative binomial (NB2) distribution.
+
+``` {r AGO data, echo=FALSE, include=FALSE}
+AGO <- read_excel("Supplementary Dataset 1.xlsx", 
+                  sheet = "AGOcov", col_types = c("numeric", 
+                                                  "date", "numeric", "text", "numeric", 
+                                                  "text", "text", "text", "text", "text", 
+                                                  "text", "text", "text", "text", "text", 
+                                                  "text", "numeric", "numeric", "text", 
+                                                  "text", "numeric", "numeric", "text", 
+                                                  "numeric", "numeric", "numeric", 
+                                                  "numeric", "numeric", "numeric", 
+                                                  "numeric", "numeric", "numeric", 
+                                                  "numeric", "numeric", "numeric", 
+                                                  "text", "numeric", "numeric", "numeric", 
+                                                  "numeric", "numeric", "numeric", 
+                                                  "numeric","numeric"))
+
+AGO$IntPhase <- relevel(as.factor(AGO$IntPhase), ref = "Pre")
+```
+
+```{r AGO, echo=TRUE, include=TRUE, warning=FALSE}
+AGOPs <- glmmTMB(AEAfemale ~ offset(log(daystrapping)) + Income*Placement 
+                    + Year*IntPhase + PRCP + TAVG + (1|Community/HouseID) 
+                    + (1|Week), family = "poisson", data = AGO)
+AGONB1 <- glmmTMB(AEAfemale ~ offset(log(daystrapping)) + Income*Placement 
+                    + Year*IntPhase + PRCP + TAVG + (1|Community/HouseID) 
+                    + (1|Week), family = "nbinom1", data = AGO)
+AGONB2 <- glmmTMB(AEAfemale ~ offset(log(daystrapping)) + Income*Placement 
+                    + Year*IntPhase + PRCP + TAVG + (1|Community/HouseID) 
+                    + (1|Week), family = "nbinom2", data = AGO)
+```
+
+The best fit distribution was the **negative binomial type 2** with the lowest AIC value suggesting overdispersion in the data. We evaluated overdispersion using the ['performance'R package](https://cran.r-project.org/web/packages/performance/performance.pdf). The variance of the data was higher than the expected variance from the Poisson model (dispersion ratio = 3.4, Pearson's Chi-squared = 11535.7, p-value = <0.001), confirming overdispersion. In figure 1 we show the scaled residual plots for the three types of distributions tested.
+
+\vspace{10mm}
+```{r Table1, echo=FALSE, results='asis'}
+AGOdist1 <- data.frame("Distribution" = c("Poisson", "Negative Binomial 1", "Negative Binomial 2"), 
+                  "Offset" = c("logs (DaysTrapping)","logs (DaysTrapping)","logs (DaysTrapping)"), 
+                  "Fixed" = c("Year * IntPhase + Income * Placement + PRCP + TAVG", "Year * IntPhase + Income * Placement + PRCP + TAVG",
+                              "Year * IntPhase + Income * Placement + PRCP + TAVG"),
+                  "Random" = c("Week + Community : HouseID", "Week + Community : HouseID", "Week + Community : HouseID"),
+                  "AIC" = c(12929.05, 9990.60, 9744.77),
+                  "Overdispersion" = c("", 3.38, 0.88))
+kable(AGOdist1, booktabs = TRUE, caption= "SAGO immediate effect GLMM distribution of the indoor and outdoor female mosquito abundance in South Texas") %>% kable_styling(bootstrap_options =  c("striped", "hover", "condensed", "responsive"), full_width = TRUE, position = "center") %>% column_spec(5, bold = TRUE) %>% row_spec(0, bold = FALSE)
+```
+
+\vspace{10mm}
+![Immediate effect GLMM scaled residual plots. A) Poisson distribution, B) Negative binomial type 1, and C) Negative binomial type 2.](/Users/jua05396/OneDrive/GitHub/AGOintervention/Figures/AGOresidual.png)
+
+<font size="5">**Model reduction**</font>
+
+The previous model was further simplified using backward elimination of parameters accounting for the two-way interaction and single effects removed based on the significance of the fixed effects estimates. These estimates were obtained using the uniroot function from [glmmTMB](https://cran.r-project.org/web/packages/glmmTMB/glmmTMB.pdf). Table 2 shows the results of the delt AIC (dAIC) for the immediate effect models.
+
+``` {r GLMM model reduction 1, echo=TRUE, include=TRUE, warning=FALSE}
+a1 <- glmmTMB(AEAfemale ~ offset(log(daystrapping)) + Income*Placement 
+              + Year*IntPhase + PRCP + TAVG + (1|Community/HouseID) + (1|Week), 
+              family = "nbinom2", data = AGO)
+a2 <- glmmTMB(AEAfemale ~ offset(log(daystrapping)) + Income*Placement 
+              + Year*IntPhase + TAVG + (1|Community/HouseID) + (1|Week), 
+              family = "nbinom2", data = AGO)
+a3 <- glmmTMB(AEAfemale ~ offset(log(daystrapping)) + Income*Placement 
+              + Year*IntPhase + (1|Community/HouseID) + (1|Week), 
+              family = "nbinom2", data = AGO)
+a4 <- glmmTMB(AEAfemale ~ offset(log(daystrapping)) + Placement + Income
+              + Year*IntPhase + (1|Community/HouseID) + (1|Week), 
+              family = "nbinom2", data = AGO)
+a5 <- glmmTMB(AEAfemale ~ offset(log(daystrapping)) + Placement + Income + 
+                Year + IntPhase + (1|Community/HouseID) + (1|Week), 
+              family = "nbinom2", data = AGO)
+```
+
+\vspace{10mm}
+```{r Table2 reduction, echo=FALSE, results='asis'}
+AICtab1 <- AICtab(a1, a2, a3, a4, a5, base = T, weights = T, sort = FALSE)
+
+kable(AICtab1,caption="dAIC comparison of the reduced immediate effect GLMM's for the surveillance of female mosquito abundance in South Texas") %>% kable_styling(bootstrap_options =  c("striped", "hover", "condensed", "responsive"), full_width = FALSE, position = "center") %>% column_spec(3, bold = TRUE)
+```
+
+The best fit non-time lag model was **a3**, but just marginally when compared to model **a2** which included the covariate of average temperature. To determine the most parsimonious model we ran an ANOVA analysis (Table 3). This analysis checks if the more complex model (a2) explains significantly more variability than the simpler one (a3). We determined that adding the covariate of temperature did not provide more precise estimates for female *Ae. aegypti* abundance. 
+
+\vspace{10mm}
+```{r Table3, echo=FALSE, results='asis'}
+Anova1 <- anova(a2, a3)
+kable(Anova1,caption="ANOVA analysis of the immediate effect a2 and a3 models") %>% kable_styling(bootstrap_options =  c("striped", "hover", "condensed", "responsive"), full_width = FALSE, position = "center") %>% column_spec(3, bold = FALSE)
+```
+
+Regression coefficients were obtained with the [car R package](https://cran.r-project.org/web/packages/car/car.pdf) using the type-III sum of square test since it violates the principle of marginality. This approach tests each term in the model after all the others. We were able to observe that the two interaction terms (Year by Intervention Phase; Socioeconomic status by Trap placement) had significant effects on the relative abundance of female *Ae. aegypti* (Table 4). The multicollinearity test showed that the interaction term between Year and Intervention Phase had a high correlation with a Variance Inflation Factor (VIF) of 16.3 (SE= 4.05) (Figure 2).
+
+\vspace{10mm}
+```{r Table4, echo=FALSE, results='asis'}
+a3Anova <- car::Anova(a3, type ="III")
+kable(a3Anova, caption="Main effects statistics of the GLMM a3 model for female mosquito abundance in South Texas") %>% kable_styling(bootstrap_options =  c("striped", "hover", "condensed", "responsive"), full_width = FALSE, position = "center") %>% column_spec(3, bold = FALSE)
+```
+
+\vspace{10mm}
+![Multicollinearity test of the non-time lag a3 model.](/Users/jua05396/OneDrive/GitHub/AGOintervention/Figures/AGOcol1.png)
+
+<font size="5">**AGO intervention**</font>
+
+Figure 3 shows the all effect plot from the a3 model for the two significant interaction terms. The interaction term between socioeconomic status and trap placement only showed a difference when comparing indoor and outdoor surveillance, with outdoor surveillance having a higher abundance of mosquitoes. When comparing socioeconomic status using the same trap placement no difference in abundance was observed. When comparing the interaction term of Year by Intervention Phase, we only observed a difference in 2017. We detected a higher relative abundance for the intervention when compared to the pre-intervention phase. 
+
+\vspace{10mm}
+![All effect plot of the non-time lag a3 model.](/Users/jua05396/OneDrive/GitHub/AGOintervention/Figures/Effect1.png)
+
+## Short effect models
+
+We evaluated if the effect of the AGO intervention was transient by analyzing the SAGO data using shorter effect models. The transient characteristic of the intervention would be confirmed if the models fit improve compared to the best fit immediate effect model, regardless if the effects of the variables were significant. For this approach we assumed two distinct scenarios: 
+
+1. **Reduced time frames**: effects of the intervention might be short lived after the deployment and reset of the intervention AGO's (IAGO's). 
+    + Weekly
+    + Monthly
+2. **Delayed time frames**: effects of the intervention were observed one or two weeks after the deployment and reset of the IAGO's. 
+    + 1 week
+    + 2 weeks
+
+As with the previous immediate effect models, we tested the best fit distribution for each of the different model assumptions.
+
+
+### Reduced time: weekly models
+
+```{r AGO weekly, echo=TRUE, include=TRUE, warning=FALSE}
+AGOweekPs <- glmmTMB(AEAfemale ~ offset(log(daystrapping)) + Income*Placement 
+                 + Year*IntPhase + PRCP + TAVG + Week + (1|Community/HouseID) 
+                 , family = "poisson", data = AGO)
+AGOweekNB1 <- glmmTMB(AEAfemale ~ offset(log(daystrapping)) + Income*Placement 
+                  + Year*IntPhase + PRCP + TAVG + Week + (1|Community/HouseID) 
+                  , family = "nbinom1", data = AGO)
+AGOweekNB2 <- glmmTMB(AEAfemale ~ offset(log(daystrapping)) + Income*Placement 
+                  + Year*IntPhase + PRCP + TAVG + Week + (1|Community/HouseID) 
+                  , family = "nbinom2", data = AGO)
+```
+
+The best fit distribution was also the **negative binomial type 2** with the lowest AIC, suggesting overdispersion in the dataset (Table 5). This was confirmed testing the dispersion of the Poisson model (dispersion ratio = 4.5, Pearson's Chi-squared = 15010.9, p-value 
+= <0.001) and also observed with the results of the scaled residual plots (Figure 4).
+
+\vspace{10mm}
+```{r Table5, echo=FALSE, results='asis'}
+AGOdist2 <- data.frame("Distribution" = c("Poisson", "Negative Binomial 1", "Negative Binomial 2"), 
+                  "Offset" = c("logs (DaysTrapping)","logs (DaysTrapping)","logs (DaysTrapping)"), 
+                  "Fixed" = c("Year * IntPhase + Income * Placement + PRCP + TAVG", "Year * IntPhase + Income * Placement + PRCP + TAVG",
+                              "Year * IntPhase + Income * Placement + PRCP + TAVG"),
+                  "Random" = c("Week + Community : HouseID", "Week + Community : HouseID", "Week + Community : HouseID"),
+                  "AIC" = c(14762.32, 10228.86, 9938.37),
+                  "Overdispersion" = c("", 4.51, 0.68))
+kable(AGOdist2, booktabs = TRUE, caption="SAGO weekly reduced time GLMM distribution of the indoor and outdoor female mosquito abundance in South Texas") %>% kable_styling(bootstrap_options =  c("striped", "hover", "condensed", "responsive"), full_width = TRUE, position = "center") %>% column_spec(5, bold = TRUE) %>% row_spec(0, bold = FALSE)
+```
+
+\vspace{10mm}
+![Weekly reduced time GLMM scaled residual plots. A) Poisson distribution, B) Negative binomial type 1, and C) Negative binomial type 2.](/Users/jua05396/OneDrive/GitHub/AGOintervention/Figures/WeekResidual.png)
+
+<font size="5">**Model reduction**</font>
+
+The weekly model was further simplified as previously explained. 
+
+``` {r GLMM model reduction 2, echo=TRUE, include=TRUE, warning=FALSE}
+a6 <- glmmTMB(AEAfemale ~ offset(log(daystrapping)) + Income*Placement 
+              + Year*IntPhase + PRCP + TAVG + Week + (1|Community/HouseID) 
+              , family = "nbinom2", data = AGO)
+a7 <- glmmTMB(AEAfemale ~ offset(log(daystrapping)) + Income*Placement 
+              + Year*IntPhase + TAVG + Week + (1|Community/HouseID) 
+              , family = "nbinom2", data = AGO)
+a8 <- glmmTMB(AEAfemale ~ offset(log(daystrapping)) + Income*Placement 
+              + Year*IntPhase + Week + (1|Community/HouseID) 
+              , family = "nbinom2", data = AGO)
+```
+
+We observed that model **a6**, which included all variables, had the best fit for our data with the lowest AIC (Table 6). The regression coefficients for model a6 showed that only precipitation did not have a statistically significant effect (Table 7). However, removing this covariate reduced the overall fit of the model. The multicollinearity analysis showed a high correlation for the interaction term between Year and Intervention Phase (VIF=18.5, SE= 4.3) and the main effect of Intervention Phase (VIF=17.3, SE= 4.15) (Figure 5). 
+
+\vspace{10mm}
+```{r Table6, echo=FALSE, results='asis'}
+AICtab2 <- AICtab(a6,a7,a8, base = T, weights = T, sort = FALSE)
+
+kable(AICtab2,caption="dAIC comparison of the weekly reduced time GLMM's") %>% kable_styling(bootstrap_options =  c("striped", "hover", "condensed", "responsive"), full_width = FALSE, position = "center") %>% column_spec(3, bold = TRUE)
+```
+
+\vspace{10mm}
+```{r Table7, echo=FALSE, results='asis'}
+a6Anova <- car::Anova(a6, type ="III")
+kable(a6Anova, caption="Main effects statistics for the weekly reduced time a6 model of the female mosquito abundance in South Texas") %>% kable_styling(bootstrap_options =  c("striped", "hover", "condensed", "responsive"), full_width = FALSE, position = "center") %>% column_spec(3, bold = FALSE)
+```
+
+\vspace{10mm}
+![Multicollinearity test of the weekly reduced time a6 model.](/Users/jua05396/OneDrive/GitHub/AGOintervention/Figures/AGOcol2.png)
+
+<font size="5">**AGO intervention**</font>
+
+Figure 6 shows the all effect plot from the a6 model. As observed in the immediate effect model, there was a difference between indoor and outdoor abundance, but no difference when comparing socioeconomic status using same trap placement. Interestingly, at this reduced time scale we were able to observe that for 2017 the Intervention communities had a higher abundance of female *Ae. aegypti* when compared to the Control communities. We observed a difference in the Intervention communities of 2018 with a lower abundance of females compared to the pre-treatment phase.
+
+\vspace{10mm}
+![All effect plot of the weekly reduced time a6 model.](/Users/jua05396/OneDrive/GitHub/AGOintervention/Figures/Effect2.png)
+
+
+### Reduced time: monthly models
+
+```{r AGO monthly, echo=TRUE, include=TRUE, warning=FALSE}
+AGOmonthPs <- glmmTMB(AEAfemale ~ offset(log(daystrapping)) + Income*Placement 
+                     + Year*IntPhase + PRCP + TAVG + MonthN + (1|Community/HouseID) 
+                     , family = "poisson", data = AGO)
+AGOmonthNB1 <- glmmTMB(AEAfemale ~ offset(log(daystrapping)) + Income*Placement 
+                      + Year*IntPhase + PRCP + TAVG + MonthN + (1|Community/HouseID) 
+                      , family = "nbinom1", data = AGO)
+AGOmonthNB2 <- glmmTMB(AEAfemale ~ offset(log(daystrapping)) + Income*Placement 
+                      + Year*IntPhase + PRCP + TAVG + MonthN + (1|Community/HouseID) 
+                      , family = "nbinom2", data = AGO)
+```
+
+As with previous distributions the **negative binomial type 2** was the best fit for the monthly reduced time model, suggesting overdispersion in the dataset (Table 8). This was confirmed testing the dispersion of the Poisson model  (dispersion ratio = 4.47, Pearson's Chi-squared = 15068.9, p-value = <0.001) and also observed with the results of the scaled residual plots (Figure 7).
+
+\vspace{3mm}
+```{r Table8, echo=FALSE, results='asis'}
+AGOdist3 <- data.frame("Distribution" = c("Poisson", "Negative Binomial 1", "Negative Binomial 2"), 
+                  "Offset" = c("logs (DaysTrapping)","logs (DaysTrapping)","logs (DaysTrapping)"), 
+                  "Fixed" = c("Year * IntPhase + Income * Placement + PRCP + TAVG", "Year * IntPhase + Income * Placement + PRCP + TAVG",
+                              "Year * IntPhase + Income * Placement + PRCP + TAVG"),
+                  "Random" = c("Week + Community : HouseID", "Week + Community : HouseID", "Week + Community : HouseID"),
+                  "AIC" = c(14809.62, 10242.52, 9947.95),
+                  "Overdispersion" = c("", 4.54, 0.68))
+kable(AGOdist3, booktabs = TRUE,  caption="SAGO monthly reduced time GLMM distribution of the indoor and outdoor female mosquito abundance in South Texas") %>% kable_styling(bootstrap_options =  c("striped", "hover", "condensed", "responsive"), full_width = TRUE, position = "center") %>% column_spec(5, bold = TRUE) %>% row_spec(0, bold = FALSE)
+```
+
+![Monthly reduced time GLMM scaled residual plots. A) Poisson distribution, B) Negative binomial type 1, and C) Negative binomial type 2.](/Users/jua05396/OneDrive/GitHub/AGOintervention/Figures/MonthResidual.png)
+
+<font size="5">**Model reduction**</font>
+
+The monthly model was further simplified as previously explained. 
+
+``` {r GLMM model reduction 3, echo=TRUE, include=TRUE, warning=FALSE}
+a9 <- glmmTMB(AEAfemale ~ offset(log(daystrapping)) + Income*Placement 
+              + Year*IntPhase + PRCP + TAVG + MonthN + (1|Community/HouseID) 
+              , family = "nbinom2", data = AGO)
+a10 <- glmmTMB(AEAfemale ~ offset(log(daystrapping)) + Income*Placement 
+              + Year*IntPhase + TAVG + MonthN + (1|Community/HouseID) 
+              , family = "nbinom2", data = AGO)
+a11 <- glmmTMB(AEAfemale ~ offset(log(daystrapping)) + Income*Placement 
+              + Year*IntPhase + MonthN + (1|Community/HouseID) 
+              , family = "nbinom2", data = AGO)
+```
+
+We observed that the **a9** model, which also included all variables as in the weekly model, had the lowest AIC (Table 9). All variables were significant with the exception of Precipitation but its inclusion improved the overall fit of the model (Table 10). The multicollinearity test detected a high correlation for the Intervention Phase and the interaction term of Year by Intervention Phase, and also a moderate correlation for Year (VIF=5.03, SE= 2.24) (Figure 8).
+
+\vspace{10mm}
+```{r Table9, echo=FALSE, results='asis'}
+AICtab3 <- AICtab(a9,a10,a11, base = T, weights = T, sort = FALSE)
+
+kable(AICtab3, caption="dAIC comparison of the monthly reduced time GLMM's") %>% kable_styling(bootstrap_options =  c("striped", "hover", "condensed", "responsive"), full_width = FALSE, position = "center") %>% column_spec(3, bold = TRUE)
+```
+
+\vspace{10mm}
+```{r Table10, echo=FALSE, results='asis'}
+a9Anova <- car::Anova(a9, type ="III")
+kable(a9Anova, caption="Main effects statistics for the monthly reduced time best fit model of the female mosquito abundance in South Texas") %>% kable_styling(bootstrap_options =  c("striped", "hover", "condensed", "responsive"), full_width = FALSE, position = "center") %>% column_spec(3, bold = FALSE)
+```
+
+\vspace{10mm}
+![Multicollinearity test of the a9 monthly reduced time model.](/Users/jua05396/OneDrive/GitHub/AGOintervention/Figures/AGOcol3.png)
+
+<font size="5">**AGO intervention**</font>
+
+In figure 9 we show the all effect plot from the a9 model. The results observed for the plot show a similar pattern as seen in the weekly reduced time model. There was a difference between indoor and outdoor abundance, but no difference when comparing socioeconomic status with same trap placement. We were able to observe that for 2017 the Intervention communities had a higher abundance of female *Ae. aegypti* when compared to the Control communities. As with the previous weekly model a difference in the Intervention communities of 2018 was observed with a lower abundance of females compared to the pre-treatment phase.
+
+
+\vspace{10mm}
+![All effect plot of the a9 model.](/Users/jua05396/OneDrive/GitHub/AGOintervention/Figures/Effect3.png)
+
+### Delayed time: 1 and 2 weeks delayed models
+
+For this next procedure we delayed the SAGO intervention period (IntPhase) by one (Delay1) or two (Delay2) weeks. This was done by adjusting the duration of the Pre-Intphase during the intervention period. We based this assumptions in that the effects of the AGO's might have started one or two weeks after deployment. We are presenting only the one week delayed distribution selection since the results obtained were almost identical for the two week delayed model. You may check the [Supplementary R code](https://github.com/jgjuarez/AGOintervention/blob/master/Code%20April%2028.R) to run the two week delayed model distribution selection.
+
+```{r AGO lagged1, echo=TRUE, include=TRUE, warning=FALSE}
+AGO$Delay1 <- relevel(as.factor(AGO$Delay1), ref = "Pre")
+
+AGOlag1Ps <- glmmTMB(AEAfemale ~ offset(log(daystrapping)) + Income*Placement 
+                      + Year*Delay1 + PRCP + TAVG + (1|Community/HouseID) + (1|Week)
+                      , family = "poisson", data = AGO)
+AGOlag1NB1 <- glmmTMB(AEAfemale ~ offset(log(daystrapping)) + Income*Placement 
+                      + Year*Delay1 + PRCP + TAVG + (1|Community/HouseID) + (1|Week)
+                      , family = "nbinom1", data = AGO)
+AGOlag1NB2 <- glmmTMB(AEAfemale ~ offset(log(daystrapping)) + Income*Placement 
+                      + Year*Delay1 + PRCP + TAVG + (1|Community/HouseID) + (1|Week) 
+                      , family = "nbinom2", data = AGO)
+```
+
+As with previous distributions the **negative binomial type 2** was the best fit for the one and two week delayed time models, suggesting overdispersion in the dataset (Table 11). We confirmed overdispersion for both Poisson models (1 week delayed dispersion ratio = 3.47, Pearson's Chi-squared = 11485.6, p-value = <0.001). In figure 10 we present the scaled residual plots for the one week delayed model, which also confirms 
+the negative binomial type 2 distribution as the best fit.
+
+\vspace{10mm}
+```{r Table11, echo=FALSE, results='asis'}
+AGOdist4 <- data.frame("Distribution" = c("Poisson", "Negative Binomial 1", "Negative Binomial 2"), 
+                  "Offset" = c("logs (DaysTrapping)","logs (DaysTrapping)","logs (DaysTrapping)"), 
+                  "Fixed" = c("Year * Delay1 + Income * Placement + PRCP + TAVG", "Year * Delay1 + Income * Placement + PRCP + TAVG",
+                              "Year * Delay1 + Income * Placement + PRCP + TAVG"),
+                  "Random" = c("Week + Community : HouseID", "Week + Community : HouseID", "Week + Community : HouseID"),
+                  "AIC" = c(12851.14, 9818.74, 9558.36),
+                  "Overdispersion" = c("", 3.55, 0.855))
+kable(AGOdist4, booktabs = TRUE, caption="One week delayed time GLMM distribution selection") %>% kable_styling(bootstrap_options =  c("striped", "hover", "condensed", "responsive"), full_width = TRUE, position = "center") %>% column_spec(5, bold = TRUE) %>% row_spec(0, bold = FALSE)
+```
+
+\vspace{10mm}
+![One week delayed time GLMM scaled residual plots. A) Poisson distribution, B) Negative binomial type 1, and C) Negative binomial type 2.](/Users/jua05396/OneDrive/GitHub/AGOintervention/Figures/Lag1Residual.png)
+
+<font size="5">**Model reduction one week delayed**</font>
+
+The one week delayed model was further simplified as previously explained. 
+
+``` {r GLMM lag reduction, echo=TRUE, include=TRUE, warning=FALSE}
+a12 <- glmmTMB(AEAfemale ~ offset(log(daystrapping)) + Income*Placement 
+              + Year*Delay1 + PRCP + TAVG + (1|Community/HouseID) + (1|Week)
+              , family = "nbinom2", data = AGO)
+a13 <- glmmTMB(AEAfemale ~ offset(log(daystrapping)) + Income*Placement 
+               + Year*Delay1 + TAVG + (1|Community/HouseID) + (1|Week)
+               , family = "nbinom2", data = AGO)
+a14 <- glmmTMB(AEAfemale ~ offset(log(daystrapping)) + Income*Placement 
+               + Year*Delay1 + (1|Community/HouseID) + (1|Week)
+               , family = "nbinom2", data = AGO)
+```
+
+We observed that model **a13** had the lowest AIC (Table 12). In table 13 we show the regression coefficients for the model, with the interactions terms and the covariate of Temperature as significant effects. As with the immediate effect model (a3), the multicollinearity test only detected a high correlation for the interaction term of Year and Intervention phase (VIF=15.34, SE= 3.92) (Figure 11). 
+
+\vspace{10mm}
+```{r Table12, echo=FALSE, results='asis'}
+AICtab4 <- AICtab(a12,a13,a14, base = T, weights = T, sort = FALSE)
+
+kable(AICtab4, caption= "dAIC comparison of the reduced one week delayed GLMM's") %>% kable_styling(bootstrap_options =  c("striped", "hover", "condensed", "responsive"), full_width = FALSE, position = "center") %>% column_spec(3, bold = TRUE)
+```
+
+\vspace{10mm}
+```{r Table13, echo=FALSE, results='asis'}
+a13Anova <- car::Anova(a13, type ="III")
+kable(a13Anova, caption= "Main effects statistics for the one week delayed best fit model of the female mosquito abundance in South Texas") %>% kable_styling(bootstrap_options =  c("striped", "hover", "condensed", "responsive"), full_width = FALSE, position = "center") %>% column_spec(3, bold = FALSE)
+```
+
+\vspace{10mm}
+![Multicollinearity test of the one week delayed a13 model.](/Users/jua05396/OneDrive/GitHub/AGOintervention/Figures/AGOcol4.png)
+
+<font size="5">**AGO intervention one week delayed**</font>
+
+The AGO intervention with a one week delay was analyzed following the previously described procedures. Figure 12 shows the all effect plot from the a13 model. We detected a similar result like in the immediate and short effect models, with a higher abundance of females in the outdoor traps but no difference by socioeconomic status. We also observed that the Intervention phase during 2017 had a higher abundance compared to the pre-treatment. 
+
+\vspace{5mm}
+![All effect plot of the a9 model.](/Users/jua05396/OneDrive/GitHub/AGOintervention/Figures/Effect4.png)
+
+<font size="5">**Model reduction two week delayed**</font>
+
+The results for the two week delayed model were similar to those observed in the one week delay model. The best fit distribution was the negative binomial type 2, with the best fit model *a16* having fixed effects for the for the temperature and the interaction terms (Table 14). In figure 13 we shows the result obtained for the all effect plot, similar results as for the one week lag figure 16. 
+
+``` {r GLMM lag 2 reduction, echo=TRUE, include=TRUE, warning=FALSE}
+AGO$Delay2 <- relevel(as.factor(AGO$Delay2), ref = "Pre")
+
+a15 <- glmmTMB(AEAfemale ~ offset(log(daystrapping)) + Income*Placement 
+               + Year*Delay2 + PRCP + TAVG + (1|Community/HouseID) + (1|Week)
+               , family = "nbinom2", data = AGO)
+a16 <- glmmTMB(AEAfemale ~ offset(log(daystrapping)) + Income*Placement 
+               + Year*Delay2 + TAVG + (1|Community/HouseID) + (1|Week)
+               , family = "nbinom2", data = AGO)
+a17 <- glmmTMB(AEAfemale ~ offset(log(daystrapping)) + Income*Placement 
+               + Year*Delay2 + (1|Community/HouseID) + (1|Week)
+               , family = "nbinom2", data = AGO)
+```
+
+\vspace{10mm}
+```{r Table14, echo=FALSE, results='asis'}
+AICtab5 <- AICtab(a15,a16,a17, base = T, weights = T, sort = FALSE)
+
+kable(AICtab5, caption= "dAIC comparison of the reduced two week delayed GLMM's") %>% kable_styling(bootstrap_options =  c("striped", "hover", "condensed", "responsive"), full_width = FALSE, position = "center") %>% column_spec(3, bold = TRUE)
+```
+
+![All effect plot of the two week delayed time a16 model.](/Users/jua05396/OneDrive/GitHub/AGOintervention/Figures/Effect5.png)
+
+## AGO intervention immediate and short time effect GLMM comparison
+
+The previous models show that the effects of the AGO intervention are indeed transient, the best fit model for the GLMM analysis was the two week delayed a16 time model. We were able to observe that if all other variables were held constant the 2018 intervention period had a suppression effect of 0.23 (77% reduction) (95% CI 0.17 – 0.35) female *Ae. aegypti* relative to the pre-treatment phase. We also observed that the Intervention treatment in 2017 had a higher female *Ae. aegypti* abundance. Table 15 shows the dAIC results of the different best fit models evaluated for the immediate and short time effect models. 
+
+\vspace{10mm}
+```{r Table 15, echo=FALSE, results='asis'}
+AICtab6 <- AICtab(a3, a6, a9, a13, a16, base = T, weights = T, sort = FALSE)
+
+kable(AICtab6, caption="GLMM best fit immediate and short time effect models with AIC comparison for the surveillance of female mosquito abundance in South Texas") %>% kable_styling(bootstrap_options =  c("striped", "hover", "condensed", "responsive"), full_width = FALSE, position = "center") %>% column_spec(3, bold = TRUE)
+```
+
+## Information Theoretic model selection
+
+We evaluated how using an Information Theoretic (IT) approach for model selection could reduced the total number of models tested and if we could improve the fit of our dataset compared to the models selected using the stepwise procedure. Based on the general model used in Table 1, we developed 3 additional models to evaluate the effects of the AGO intervention. Firstly, we excluded climatic variables from these IT models. These effects have been previously observed to affect mosquito abundance, however, at this fine scale of evaluation we assumed that these effects would not significantly improve the fit between models. Secondly, the interaction term between Year and Intervention Phase was consistent since this is the main focus of or study. Thirdly, we have previously observed that income and trap placement modulate mosquitoes in these communities so we did not remove these variables from the models tested. Our main models are seen in Table 16.
+
+\vspace{10mm}
+```{r Table16, echo=FALSE, results='asis'}
+AGOdistIT <- data.frame("Model" = c("IT1", "IT2", "IT3"), 
+                  "Offset" = c("logs (DaysTrapping)","logs (DaysTrapping)","logs (DaysTrapping)"), 
+                  "Fixed" = c("Year * IntPhase + Income * Placement", "Year * IntPhase + Income + Placement",
+                              "Year * IntPhase + Placement"),
+                  "Random" = c("Week + Community : HouseID", "Week + Community : HouseID", "Week + Community : HouseID"))
+kable(AGOdistIT, booktabs = TRUE, caption= "Information Theoretic approach GLMM models of the indoor and outdoor female mosquito abundance in South Texas") %>% kable_styling(bootstrap_options =  c("striped", "hover", "condensed", "responsive"), full_width = TRUE, position = "center") %>% column_spec(3, bold = TRUE) %>% row_spec(0, bold = FALSE)
+```
+
+\vspace{10mm}
+
+We used these 3 models for all the different scenarios previously evaluated. The results for the best fit models from these analysis are shown in Table 17. Using the IT approach we also observed that the lagged scenarios were the best to fit our data. With the 1 week lag having the best fit.
+
+``` {r GLMM IT approach, echo=TRUE, include=TRUE, warning=FALSE}
+IT1 <- glmmTMB(AEAfemale ~ offset(log(daystrapping)) + Income*Placement 
+                  + Year*IntPhase + (1|Community/HouseID) 
+                  + (1|Week), family = "nbinom2", data = AGO)
+
+IT2 <- glmmTMB(AEAfemale ~ offset(log(daystrapping)) + Income + Placement 
+               + Year*IntPhase + (1|Community/HouseID) 
+               + (1|Week), family = "nbinom2", data = AGO)
+
+IT3 <- glmmTMB(AEAfemale ~ offset(log(daystrapping)) + Placement 
+               + Year + IntPhase + (1|Community/HouseID) 
+               + (1|Week), family = "nbinom2", data = AGO)
+
+#Reduced weekly
+IT4 <- glmmTMB(AEAfemale ~ offset(log(daystrapping)) + Income*Placement 
+               + Year*IntPhase + Week + (1|Community/HouseID) 
+               , family = "nbinom2", data = AGO)
+
+IT5 <- glmmTMB(AEAfemale ~ offset(log(daystrapping)) + Income + Placement 
+               + Year*IntPhase + Week + (1|Community/HouseID) 
+               , family = "nbinom2", data = AGO)
+
+IT6 <- glmmTMB(AEAfemale ~ offset(log(daystrapping)) + Placement 
+               + Year + IntPhase + Week + (1|Community/HouseID) 
+               , family = "nbinom2", data = AGO)
+
+#Reduced monthly
+IT7 <- glmmTMB(AEAfemale ~ offset(log(daystrapping)) + Income*Placement 
+               + Year*IntPhase + MonthN + (1|Community/HouseID) 
+               , family = "nbinom2", data = AGO)
+
+IT8 <- glmmTMB(AEAfemale ~ offset(log(daystrapping)) + Income + Placement 
+               + Year*IntPhase + MonthN + (1|Community/HouseID) 
+               , family = "nbinom2", data = AGO)
+
+IT9 <- glmmTMB(AEAfemale ~ offset(log(daystrapping)) + Placement 
+               + Year + IntPhase + MonthN + (1|Community/HouseID) 
+               , family = "nbinom2", data = AGO)
+
+#Delayed 1 week
+IT10 <- glmmTMB(AEAfemale ~ offset(log(daystrapping)) + Income*Placement 
+               + Year*Delay1 + (1|Community/HouseID) 
+               + (1|Week), family = "nbinom2", data = AGO)
+
+IT11 <- glmmTMB(AEAfemale ~ offset(log(daystrapping)) + Income + Placement 
+               + Year*Delay1 + (1|Community/HouseID) 
+               + (1|Week), family = "nbinom2", data = AGO)
+
+IT12 <- glmmTMB(AEAfemale ~ offset(log(daystrapping)) + Placement 
+               + Year + Delay1 + (1|Community/HouseID) 
+               + (1|Week), family = "nbinom2", data = AGO)
+
+#Delayed 2 weeks
+IT13 <- glmmTMB(AEAfemale ~ offset(log(daystrapping)) + Income*Placement 
+               + Year*Delay2 + (1|Community/HouseID) 
+               + (1|Week), family = "nbinom2", data = AGO)
+
+IT14 <- glmmTMB(AEAfemale ~ offset(log(daystrapping)) + Income + Placement 
+               + Year*Delay2 + (1|Community/HouseID) 
+               + (1|Week), family = "nbinom2", data = AGO)
+
+IT15 <- glmmTMB(AEAfemale ~ offset(log(daystrapping)) + Placement 
+               + Year + Delay2 + (1|Community/HouseID) 
+               + (1|Week), family = "nbinom2", data = AGO)
+
+```
+
+\vspace{10mm}
+```{r Table 17, echo=FALSE, results='asis'}
+AICtabIT1 <- AICtab(IT1,IT4,IT7,IT10,IT13, base = T, weights = T, sort = FALSE)
+
+kable(AICtabIT1, caption="dAIC comparison of the best fit Information Theoretic GLMM's") %>% kable_styling(bootstrap_options =  c("striped", "hover", "condensed", "responsive"), full_width = FALSE, position = "center") %>% column_spec(3, bold = TRUE)
+```
+
+We then compared these AIC values with those from the best fit models using the stepwise approach (Table 18). The results showed that the stepwise approach still produced the best fit for our data. However, when comparing the AIC weights we did not observe a large difference between the best models selected using IT or stepwise. The ANOVA test between models showed no statistical difference between the IT10 and a16 models. We also observed that using the best fit model IT10 generated almost identical results to those observed for the a16 model. The previous procedure shows that model selection using an IT approach not only generates a strait forward procedure to follow, a smaller number of models to evaluate but also produces similar results to that of a stepwise procedure if variable selection and interactions are identified and set accordingly based on project objectives and knowledge of the variables.
+
+
+\vspace{10mm}
+```{r Table18, echo=FALSE, results='asis'}
+AICtabIT2 <- AICtab(IT1,IT4,IT7,IT10,IT13,a3,a6,a9,a13,a16, base = T, weights = T, sort = TRUE)
+
+kable(AICtabIT2, caption="dAIC comparison of the best fit Information Theoretic and stepwise GLMM's") %>% kable_styling(bootstrap_options =  c("striped", "hover", "condensed", "responsive"), full_width = FALSE, position = "center") %>% column_spec(3, bold = TRUE)
+```
+
+
+# Random slope GLMM {.tabset-pills}
+
+In this next procedure we wanted to further evaluate the SAGO dataset on how the effect of community engagement, measured as community participation (8 levels: 1 level per community with the percentage of community members that participated in the AGO intervention) with the added effect of coverage of IAGO's within an area, might have affected the success of the intervention.
+ 
+For this purpose we generated a new variable called covarage rate (Cov~rate~) which is the estimation of coverage as:
+
+$$\mathbf{Cov_{rate}} = \frac{C_{trap}}{C_{house}}$$
+* C~trap~= the total number of **traps** placed on a 200m radius from a SAGO house.
+* C~house~= the total number of **houses** located on a 200m radius from a SAGO house.
+
+Coverage rate was calculated to account for variation on the size of a community. Large communities might have a higher count of IAGO's deployed but a low coverage based on community participation. The variable community participation adjust the effect of intervention phase, which we previously assumed to have the same effect consistently applied across the different communities during the intervention. These models allowed the abundance of female *Ae. aegypti* to differ by the coverage rate of each community. We use these models cautiously since the variance of the model is no longer constant. However, the slopes of coverage rate are statistically significant and clearly interpretable. 
+
+## Participation and CovRate
+
+As previously done, we first tested the best fit distribution for the dataset, with the inclusion of these two new variables (Cov~rate~200 and Participation).
+
+```{r AGO community, echo=TRUE, include=TRUE, warning=FALSE}
+AGOcovP <- glmmTMB(AEAfemale ~ offset(log(daystrapping)) + Income + Placement 
+                   + Income*Placement + PRCP + TAVG + CovRate200 + Participation 
+                   + (1|Week)+ (1 + CovRate200|Community), family = "poisson", 
+                   data = AGO)
+AGOcovNB1 <- glmmTMB(AEAfemale ~ offset(log(daystrapping)) + Income + Placement 
+                   + Income*Placement + PRCP + TAVG + CovRate200 + Participation 
+                   + (1|Week) + (1 + CovRate200|Community), family = "nbinom1", 
+                   data = AGO)
+AGOcovNB2 <- glmmTMB(AEAfemale ~ offset(log(daystrapping)) + Income + Placement 
+                   + Income*Placement + PRCP + TAVG + CovRate200 + Participation 
+                   + (1|Week) + (1 + CovRate200|Community), family = "nbinom2", 
+                   data = AGO)
+```
+
+The AIC results showed that the best fit distribution was the  **negative binomial type 2** (Table 19). As previously the data was overdispersed for the Poisson model (ratio = 3.68, Pearson's Chi-squared = 12427.8, p-value = <0.001). In figure 14 we show the scaled residual plots for random slope models, confirming the negative binomial type 2 distribution as the best fit.
+
+\vspace{10mm}
+```{r Table19, echo=FALSE, results='asis'}
+AGOdist5 <- data.frame("Distribution" = c("Poisson", "Negative Binomial 1", "Negative Binomial 2"), 
+                  "Offset" = c("logs (DaysTrapping)","logs (DaysTrapping)","logs (DaysTrapping)"), 
+                  "Fixed" = c("Year * IntPhase + Income * Placement + PRCP + TAVG", "Year * IntPhase + Income * Placement + PRCP + TAVG",
+                              "Year * IntPhase + Income * Placement + PRCP + TAVG"),
+                  "Random" = c("Week + Community : HouseID", "Week + Community : HouseID", "Week + Community : HouseID"),
+                  "AIC" = c(12929.05, 9990.60, 9744.77),
+                  "Overdispersion" = c("", 3.42, 0.89))
+kable(AGOdist5, booktabs = TRUE, caption= "dAIC Random slope GLMM distribution") %>% kable_styling(bootstrap_options =  c("striped", "hover", "condensed", "responsive"), full_width = TRUE, position = "center") %>% column_spec(5, bold = TRUE) %>% row_spec(0, bold = FALSE)
+```
+
+\vspace{10mm}
+![Random slope GLMM scaled residual plots. A) Poisson distribution, B) Negative binomial type 1, and C) Negative binomial type 2.](/Users/jua05396/OneDrive/GitHub/AGOintervention/Figures/CovResidual.png)
+
+<font size="5">**AGO intervention**</font>
+
+``` {r GLMM coverage reduction, echo=TRUE, include=TRUE, warning=FALSE}
+a18 <- glmmTMB(AEAfemale ~ offset(log(daystrapping)) + Income + Placement 
+               + Income*Placement + PRCP + TAVG + CovRate200 + Participation + (1|Week)
+               + (1 + CovRate200|Community), family = "nbinom2", data = AGO)
+a19 <- glmmTMB(AEAfemale ~ offset(log(daystrapping)) + Income + Placement 
+               + Income*Placement + PRCP + TAVG + CovRate200 + Participation + (1|Week)
+               + (1|Community), family = "nbinom2", data = AGO)
+```
+
+We model the random slope effect of coverage rate and observed that the inclusion of the variable CovRate lowered the AIC of the model improving its fit (Table 20). We also carried out an ANOVA test to compare both of the models and observed that the random slope effect significantly explained more variability of the SAGO data (Table 21). In Table 22 we show the regression coefficients for the random slope model a18, which has community participation as a significant effect for female *Ae. aegypti* abundance. The multicollinearity test did not show any moderate or high correlation effects (Figure 15).
+
+\vspace{10mm}
+```{r Table20, echo=FALSE, results='asis'}
+AICtab7 <- AICtab(a18,a19, base = T, weights = T, sort = FALSE)
+
+kable(AICtab7, caption= "dAIC comparison of the random slope GLMM's") %>% kable_styling(bootstrap_options =  c("striped", "hover", "condensed", "responsive"), full_width = FALSE, position = "center") %>% column_spec(3, bold = TRUE)
+```
+
+\vspace{10mm}
+```{r Table21, echo=FALSE, results='asis'}
+Anova3 <- anova(a18, a19)
+kable(Anova3, caption="ANOVA comparison between the a18 and a19 models for female mosquito abundance in South Texas") %>% kable_styling(bootstrap_options =  c("striped", "hover", "condensed", "responsive"), full_width = FALSE, position = "center") %>% column_spec(3, bold = FALSE)
+```
+
+\vspace{10mm}
+```{r Table22, echo=FALSE, results='asis'}
+a18Anova <- car::Anova(a18, type ="III")
+kable(a18Anova, caption="Main effects statistics for the coverage rate random slope GLMM model of the female mosquito abundance in South Texas.") %>% kable_styling(bootstrap_options =  c("striped", "hover", "condensed", "responsive"), full_width = FALSE, position = "center") %>% column_spec(3, bold = FALSE)
+```
+
+\vspace{10mm}
+![Multicollinearity test of the a13 model.](/Users/jua05396/OneDrive/GitHub/AGOintervention/Figures/AGOcol5.png)
+
+# GAMM {.tabset-pills}
+
+The previous models showed that the effects of the AGO intervention were transient with coverage rate modulating the success of the intervention. We further analyzed the dataset using a generalized additive mixed model (GAMM) approach with smooth spline penalizing effects for the covariates: week and coverage rate. This approach allow us to to estimate a threshold of coverage rate to determine on which point the capture rates start declining. These also allowed us to identify if surges in female *Ae. aegypti* abundance might have been operating below a threshold where suppression would have taken over. As previously, we evaluated the dataset distribution for which the *negative binomial* distribution had the best fit (Table 23). 
+
+```{r GAMM best fit, echo=TRUE, include=TRUE}
+GamPs <- gamm4(AEAfemale ~ offset(log(daystrapping)) + Year + Income*Placement 
+               + s(Week) + s(CovRate200), random =~ (1|HouseID) 
+               + (1|Community), data = AGO, family=poisson)
+GamNB <- gamm4(AEAfemale ~ offset(log(daystrapping)) + Year + Income*Placement 
+               + s(Week) + s(CovRate200), random =~ (1|HouseID) 
+               + (1|Community), data = AGO, family=neg.bin(1))
+```
+
+\vspace{10mm}
+```{r Table23, echo=FALSE, results='asis'}
+AGOdist6 <- data.frame("Distribution" = c("Poisson", "Negative Binomial"), 
+                  "Offset" = c("logs (DaysTrapping)","logs (DaysTrapping)"), 
+                  "Fixed" = c("Year + Income * Placement", 
+                              "Year + Income * Placement"),
+                  "Slipe" = c("Week + CovRate", "Week + CovRate"),
+                  "Random" = c("Community + HouseID", "Community + HouseID"),
+                  "AIC" = c(13821.2, 9781.0))
+kable(AGOdist6, booktabs = TRUE, caption="CovRate GAMM distribution selection of the indoor and outdoor female mosquito abundance in South Texas") %>% kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), full_width = TRUE, position = "center") %>% column_spec(6, bold = TRUE) %>% row_spec(0, bold = FALSE)
+```
+
+## CovRate
+
+The results and discussion of this procedure are detailed and explained in the main manuscript. We present some brief results obtained from this modeling approach. Table 24 shows the estimates obtained from the GAMM for the parametric coefficients and the smoothing terms. In figure 16 we observe the female *Ae. aegypti* abundance with a smoothing spline penalization for week. The analysis shows three distinct 
+periods for mosquito abundance in the LRGV, having a higher abundance for these time points. We observed that female outdoor abundance was 10.7 females (exp(2.37)) when the smoothing term of CovRate200m was at 0 AGO/house, this increased to 17.1 (exp(2.37 + 0.47)) at 1 AGO/house and decreased to 4.6 (exp(2.37 - 0.84)) at 2.7 AGO's/house (Figure 17). 
+
+\vspace{10mm}
+Table 24. Main effects statistics for the GAMM model of female *Ae. aegypti* abundance in South Texas.
+```{r TableXX Gamm Estimates, echo=FALSE, results='asis'}
+summary(GamNB)
+gamtabs(GamNB$gam)
+```
+
+\vspace{10mm}
+
+\vspace{10mm}
+![GAMM with week as the spline effect.](/Users/jua05396/OneDrive/GitHub/AGOintervention/Figures/AGOsplineweek.png)
+
+![GAMM with CovRate as the spline effect.](/Users/jua05396/OneDrive/GitHub/AGOintervention/Figures/AGOsplineCovRate.png)
